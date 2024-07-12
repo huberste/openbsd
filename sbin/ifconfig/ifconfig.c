@@ -178,6 +178,7 @@ int	shownet80211chans;
 int	shownet80211nodes;
 int	showclasses;
 int	showtransceiver;
+int	dumpnvm;
 
 struct	ifencap;
 
@@ -348,6 +349,7 @@ void	utf16_to_char(uint16_t *, int, char *, size_t);
 int	char_to_utf16(const char *, uint16_t *, size_t);
 void	transceiver(const char *, int);
 void	transceiverdump(const char *, int);
+void	nvm(const char *, int);
 
 /* WG */
 void	setwgpeer(const char *, int);
@@ -369,6 +371,7 @@ void	wg_status(int);
 #else
 void	setignore(const char *, int);
 #endif
+int	if_dump_nvm();
 
 struct if_clonereq *get_cloners(void);
 int	findmac(const char *);
@@ -620,6 +623,7 @@ const struct	cmd {
 	{ "transceiver", NEXTARG0,	0,		transceiver },
 	{ "sff",	NEXTARG0,	0,		transceiver },
 	{ "sffdump",	0,		0,		transceiverdump },
+	{ "nvm", 	NEXTARG0,	0,		nvm },
 
 	{ "wgpeer",	NEXTARG,	A_WIREGUARD,	setwgpeer},
 	{ "wgdescription", NEXTARG,	A_WIREGUARD,	setwgpeerdesc},
@@ -3442,6 +3446,41 @@ status(int link, struct sockaddr_dl *sdl, int ls, int ifaliases)
 		if (if_sff_info(0) == -1)
 			if (!aflag && errno != EPERM && errno != ENOTTY)
 				warn("%s transceiver", ifname);
+		void* nvm = malloc(4*1024);
+		memset(nvm, 0, 4096);
+		int rv = ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)nvm);
+		//int rv = ioctl(sock, SIOCGIFNVM, (caddr_t)nvm);
+		if (rv != 0) {
+			switch (errno) {
+			case EIO:
+				printf("ERROR: EIO (Input/output error)\n");
+			case ENXIO:
+				printf("ERROR: ENXIO (Device not configured)\n");
+				break;
+			default:
+				printf("ERROR: rv: %d, errno: %d\n", rv, errno);
+				break;
+			}
+		}
+	}
+
+	if (dumpnvm) {
+		// if_dump_nvm();
+		void* nvm = malloc(4*1024);
+		memset(nvm, 0, 4096);
+		int rv = ioctl(sock, SIOCGIFNVM, (caddr_t)nvm);
+		if (rv != 0) {
+			switch (errno) {
+			case EIO:
+				printf("ERROR: EIO (Input/output error)\n");
+			case ENXIO:
+				printf("ERROR: ENXIO (Device not configured)\n");
+				break;
+			default:
+				printf("ERROR: rv: %d, errno: %d\n", rv, errno);
+				break;
+			}
+		}
 	}
 #endif
 	ieee80211_status();
@@ -4160,6 +4199,12 @@ void
 transceiver(const char *value, int d)
 {
 	showtransceiver = 1;
+}
+
+void
+nvm(const char *value, int d)
+{
+	dumpnvm = 1;
 }
 
 void
@@ -6855,4 +6900,18 @@ done:
 	free(ifcr->ifcr_buffer);
 	freeifaddrs(ifap);
 	return ret;
+}
+
+int
+if_dump_nvm()
+{
+	printf("TEST\n");
+	void* nvm = malloc(4*1024);
+	memset(nvm, 0, 4096);
+	printf("sock: %d", sock);
+	int rv = ioctl(sock, SIOCGIFNVM, (caddr_t)nvm);
+	if (rv != 0) {
+		printf("ERROR: rv: %d, errno: %d\n", rv, errno);
+	}
+	return rv;
 }

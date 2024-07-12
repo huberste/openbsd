@@ -99,7 +99,7 @@
 #define CACHE_LINE_SIZE 64
 #endif
 
-#define IXL_MAX_VECTORS			8 /* XXX this is pretty arbitrary */
+#define IXL_MAX_VECTORS			4 /* XXX this is pretty arbitrary */
 
 #define I40E_MASK(mask, shift)		((mask) << (shift))
 #define I40E_PF_RESET_WAIT_COUNT	200
@@ -194,6 +194,13 @@ struct ixl_aq_desc {
 #define IXL_AQ_OP_PHY_SET_EVENT_MASK	0x0613
 #define IXL_AQ_OP_PHY_SET_REGISTER	0x0628
 #define IXL_AQ_OP_PHY_GET_REGISTER	0x0629
+#define IXL_AQ_OP_NVM_READ		0x0701
+#define IXL_AQ_OP_NVM_ERASE		0x0702
+#define IXL_AQ_OP_NVM_UPDATE		0x0703
+#define IXL_AQ_OP_NVM_CFG_READ		0x0704
+#define IXL_AQ_OP_NVM_CFG_WRITE		0x0705
+#define IXL_AQ_OP_NVM_RESERVED		0x0706
+#define IXL_AQ_OP_NVM_ROLLBACK		0x0707
 #define IXL_AQ_OP_LLDP_GET_MIB		0x0a00
 #define IXL_AQ_OP_LLDP_MIB_CHG_EV	0x0a01
 #define IXL_AQ_OP_LLDP_ADD_TLV		0x0a02
@@ -207,6 +214,15 @@ struct ixl_aq_desc {
 #define IXL_AQ_OP_SET_RSS_LUT		0x0b03 /* 722 only */
 #define IXL_AQ_OP_GET_RSS_KEY		0x0b04 /* 722 only */
 #define IXL_AQ_OP_GET_RSS_LUT		0x0b05 /* 722 only */
+#define IXL_AQ_SHARED_RESOURCE_NVM			0x0001
+#define IXL_AQ_SHARED_RESOURCE_SDP			0x0002
+#define IXL_AQ_SHARED_RESOURCE_NVM_TIMEOUT_READ		  3000
+#define IXL_AQ_SHARED_RESOURCE_NVM_TIMEOUT_WRITE	180000
+#define IXL_AQ_SHARED_RESOURCE_SDP_TIMEOUT		     0
+#define IXL_AQ_SHARED_RESOURCE_READ			0x0001
+#define IXL_AQ_SHARED_RESOURCE_WRITE			0x0002
+#define IXL_AQ_NVM_COMMAND_FLAGS_LAST_COMMAND_BIT 1 << 0
+#define IXL_AQ_NVM_COMMAND_FLAGS_FLASH_ONLY 1 << 7
 
 struct ixl_aq_mac_addresses {
 	uint8_t		pf_lan[ETHER_ADDR_LEN];
@@ -1332,6 +1348,12 @@ static int	ixl_dmamem_alloc(struct ixl_softc *, struct ixl_dmamem *,
 		    bus_size_t, u_int);
 static void	ixl_dmamem_free(struct ixl_softc *, struct ixl_dmamem *);
 
+static int	ixl_request_resource_ownership(struct ixl_softc *sc,
+		    uint16_t resource, uint16_t type, uint32_t timeout,
+		    uint32_t number);
+static int	ixl_release_resource(struct ixl_softc *sc, uint16_t resource,
+		    uint32_t number);
+
 static int	ixl_arq_fill(struct ixl_softc *);
 static void	ixl_arq_unfill(struct ixl_softc *);
 
@@ -1412,6 +1434,7 @@ static void	ixl_rxfill(struct ixl_softc *, struct ixl_rx_ring *);
 static void	ixl_rxrefill(void *);
 static int	ixl_rxrinfo(struct ixl_softc *, struct if_rxrinfo *);
 static void	ixl_rx_checksum(struct mbuf *, uint64_t);
+static int	ixl_get_nvm(struct ixl_softc *sc);
 
 #if NKSTAT > 0
 static void	ixl_kstat_attach(struct ixl_softc *);
@@ -1532,6 +1555,7 @@ ixl_aq_dva(struct ixl_aq_desc *iaq, bus_addr_t addr)
 #endif
 
 static struct rwlock ixl_sff_lock = RWLOCK_INITIALIZER("ixlsff");
+static struct rwlock ixl_nvm_lock = RWLOCK_INITIALIZER("ixlnvm");
 
 /* deal with differences between chips */
 
@@ -1806,6 +1830,11 @@ ixl_attach(struct device *parent, struct device *self, void *aux)
 		}
 
 		delaymsec(100);
+	}
+
+	int rv = ixl_get_nvm(sc);
+	if (rv != 0) {
+		printf(", unable to get nvm\n");
 	}
 
 	ixl_wr(sc, sc->sc_aq_regs->arq_tail, sc->sc_arq_prod);
@@ -2175,6 +2204,16 @@ ixl_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			break;
 
 		error = ixl_get_sffpage(sc, (struct if_sffpage *)data);
+		rw_exit(&ixl_sff_lock);
+		break;
+
+	case SIOCGIFNVM:
+		printf("SIOCGIFNVM");
+		error = rw_enter(&ixl_nvm_lock, RW_WRITE|RW_INTR);
+		if (error != 0)
+			break;
+
+		error = ixl_get_nvm(sc);
 		rw_exit(&ixl_sff_lock);
 		break;
 
@@ -3822,6 +3861,77 @@ ixl_get_version(struct ixl_softc *sc)
 	return (0);
 }
 
+/*
+ * read nvm contents
+ */
+static int
+ixl_get_nvm(struct ixl_softc *sc)
+{
+	struct ixl_aq_desc iaq;
+	struct ixl_dmamem idm;
+	uint8_t command_flags, module_pointer;
+	uint16_t len;
+	uint32_t offset;
+	size_t datalen;
+	int rv;
+
+	if (ixl_request_resource_ownership(sc, IXL_AQ_SHARED_RESOURCE_NVM,
+		IXL_AQ_SHARED_RESOURCE_READ,
+		IXL_AQ_SHARED_RESOURCE_NVM_TIMEOUT_READ, 0) != 0) {
+		printf("Could not acquire ownership of NVM");
+	}
+
+	printf("TRACE reading NVM...\n");
+	memset(&iaq, 0, sizeof(iaq));
+	iaq.iaq_opcode = htole16(IXL_AQ_OP_NVM_READ);
+	iaq.iaq_flags = htole16(IXL_AQ_BUF);
+	datalen = 512;
+	iaq.iaq_datalen = htole16(datalen);
+	command_flags = 0;
+	module_pointer = 0;
+	len = datalen;
+	offset = 0; // actually 32 bit
+	command_flags = IXL_AQ_NVM_COMMAND_FLAGS_LAST_COMMAND_BIT;
+	iaq.iaq_param[0] |= command_flags;
+	iaq.iaq_param[0] = iaq.iaq_param[0] << 8;
+	iaq.iaq_param[0] |= module_pointer;
+	iaq.iaq_param[0] = iaq.iaq_param[0] << 16;
+	iaq.iaq_param[0] |= len;
+	iaq.iaq_param[0] = htole32(iaq.iaq_param[0]);
+	iaq.iaq_param[1] = htole32(offset);
+	/* initialize DMA memory ^*/
+	if (ixl_dmamem_alloc(sc, &idm, datalen, 0) != 0) {
+		printf("ERROR: unable to allocate %zu Bytes DMA memory!\n", datalen);
+		//return (-1);
+	}
+	ixl_aq_dva(&iaq, IXL_DMA_DVA(&idm));
+
+	bus_dmamap_sync(sc->sc_dmat, IXL_DMA_MAP(&idm), 0, IXL_DMA_LEN(&idm),
+		BUS_DMASYNC_PREREAD);
+
+	rv = ixl_atq_poll(sc, &iaq, 2000);
+
+	bus_dmamap_sync(sc->sc_dmat, IXL_DMA_MAP(&idm), 0, IXL_DMA_LEN(&idm),
+		BUS_DMASYNC_POSTREAD);
+
+	if (rv != 0)
+		printf("ERROR poll timed out!: %d", rv);
+	if (iaq.iaq_retval != htole16(IXL_AQ_RC_OK))
+		printf("ERROR EIO: %d\n", iaq.iaq_retval);
+	uint32_t *data = IXL_DMA_KVA(&idm);
+	printf("DEBUG data after aq poll (should not be zeros):\n");
+	printf("DEBUG 0x%08x 0x%08x 0x%08x 0x%08x\n", *(data + 0),
+	                                    *(data + 1),
+	                                    *(data + 2),
+	                                    *(data + 3));
+	// TODO: free() data
+	if (ixl_release_resource(sc, IXL_AQ_SHARED_RESOURCE_NVM, 0) != 0) {
+		printf("Could not release ownership of NVM");
+	}
+
+	return (0);
+}
+
 static int
 ixl_pxe_clear(struct ixl_softc *sc)
 {
@@ -5218,6 +5328,58 @@ ixl_dmamem_free(struct ixl_softc *sc, struct ixl_dmamem *ixm)
 	bus_dmamem_unmap(sc->sc_dmat, ixm->ixm_kva, ixm->ixm_size);
 	bus_dmamem_free(sc->sc_dmat, &ixm->ixm_seg, 1);
 	bus_dmamap_destroy(sc->sc_dmat, ixm->ixm_map);
+}
+
+static int
+ixl_request_resource_ownership(struct ixl_softc *sc,
+    uint16_t resource, uint16_t type, uint32_t timeout, uint32_t number)
+{
+	struct ixl_aq_desc iaq;
+	int rv;
+
+	printf("TRACE acquiring NVM ownership...\n");
+	memset(&iaq, 0, sizeof(iaq));
+	iaq.iaq_opcode = htole16(IXL_AQ_OP_REQUEST_RESOURCE);
+	iaq.iaq_param[0] |= type;
+	iaq.iaq_param[0] = iaq.iaq_param[0] << 16;
+	iaq.iaq_param[0] |= resource;
+	iaq.iaq_param[1] = htole32(timeout);
+	iaq.iaq_param[2] = htole32(number);
+	rv = ixl_atq_poll(sc, &iaq, 2000);
+	if (rv != 0) {
+		printf("poll timed out!: %d", rv);
+		return rv;
+	}
+	if (iaq.iaq_retval != htole16(IXL_AQ_RC_OK)) {
+		printf("EIO: %d\n", iaq.iaq_retval);
+		return iaq.iaq_retval;
+	}
+	printf("TRACE acquired NVM ownership \\o/\n");
+	return 0;
+}
+
+static int
+ixl_release_resource(struct ixl_softc *sc, uint16_t resource, uint32_t number)
+{
+	struct ixl_aq_desc iaq;
+	int rv;
+
+	printf("TRACE releasing NVM ownership...\n");
+	memset(&iaq, 0, sizeof(iaq));
+	iaq.iaq_opcode = htole16(IXL_AQ_OP_RELEASE_RESOURCE);
+	iaq.iaq_param[0] |= resource;
+	iaq.iaq_param[2] = htole32(number);
+	rv = ixl_atq_poll(sc, &iaq, 2000);
+	if (rv != 0) {
+		printf("ERROR poll timed out!: %d", rv);
+		return rv;
+	}
+	if (iaq.iaq_retval != htole16(IXL_AQ_RC_OK)) {
+		printf("ERROR EIO: %d\n", iaq.iaq_retval);
+		return iaq.iaq_retval;
+	}
+	printf("TRACE released NVM ownership \\o/\n");
+	return 0;
 }
 
 #if NKSTAT > 0

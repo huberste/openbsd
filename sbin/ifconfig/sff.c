@@ -415,6 +415,7 @@ if_sff_info(int dump)
 	uint8_t id, ext_id;
 
 	if_sffpage_init(&pg0, IFSFF_ADDR_EEPROM, 0);
+	printf("sock: %d", sock);
 	if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1) {
 		if (errno == ENXIO) {
 			/* try 1 for XFP cos myx which can't switch pages... */

@@ -70,6 +70,9 @@
 #define	SIOCGIFMEDIA	_IOWR('i', 56, struct ifmediareq) /* get net media */
 #define	SIOCGIFSFFPAGE	_IOWR('i', 57, struct if_sffpage) /* get SFF page */
 
+#define SIOCGIFNVM	_IOWR('i', 58, void*)	/* get NVM */
+#define SIOCSIFNVM	_IOWR('i', 59, void*)	/* set NVM */
+
 #define	SIOCDIFPHYADDR	 _IOW('i', 73, struct ifreq)	/* delete gif addrs */
 #define	SIOCSLIFPHYADDR	 _IOW('i', 74, struct if_laddrreq) /* set gif addrs */
 #define	SIOCGLIFPHYADDR	_IOWR('i', 75, struct if_laddrreq) /* get gif addrs */

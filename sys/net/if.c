@@ -2373,6 +2373,7 @@ forceup:
 		break;
 
 	case SIOCGIFSFFPAGE:
+		printf("if_ioctl SIOCGIFSFFPAGE");
 		error = suser(p);
 		if (error != 0)
 			break;
@@ -2382,6 +2383,15 @@ forceup:
 			break;
 
 		/* don't take NET_LOCK because i2c reads take a long time */
+		error = ((*ifp->if_ioctl)(ifp, cmd, data));
+		break;
+
+	case SIOCGIFNVM:
+		printf("if_ioctl SIOCGIFNVM");
+		error = suser(p);
+		if (error != 0)
+			break;
+
 		error = ((*ifp->if_ioctl)(ifp, cmd, data));
 		break;
 
