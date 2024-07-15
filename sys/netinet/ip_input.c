@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_input.c,v 1.397 2024/07/02 18:33:47 bluhm Exp $	*/
+/*	$OpenBSD: ip_input.c,v 1.399 2024/07/14 18:53:39 bluhm Exp $	*/
 /*	$NetBSD: ip_input.c,v 1.30 1996/03/16 23:53:58 christos Exp $	*/
 
 /*
@@ -83,8 +83,15 @@
 #include <netinet/ip_carp.h>
 #endif
 
+/*
+ * Locks used to protect global variables in this file:
+ *	I	immutable after creation
+ *	a	atomic operations
+ *	N	net lock
+ */
+
 /* values controllable via sysctl */
-int	ip_forwarding = 0;
+int	ip_forwarding = 0;			/* [a] */
 int	ipmforwarding = 0;
 int	ipmultipath = 0;
 int	ip_sendredirects = 1;
@@ -104,11 +111,14 @@ LIST_HEAD(, ipq) ipq;
 int	ip_maxqueue = 300;
 int	ip_frags = 0;
 
+const struct sysctl_bounded_args ipctl_vars_unlocked[] = {
+	{ IPCTL_FORWARDING, &ip_forwarding, 0, 2 },
+};
+
 const struct sysctl_bounded_args ipctl_vars[] = {
 #ifdef MROUTING
 	{ IPCTL_MRTPROTO, &ip_mrtproto, SYSCTL_INT_READONLY },
 #endif
-	{ IPCTL_FORWARDING, &ip_forwarding, 0, 2 },
 	{ IPCTL_SENDREDIRECTS, &ip_sendredirects, 0, 1 },
 	{ IPCTL_DEFTTL, &ip_defttl, 0, 255 },
 	{ IPCTL_DIRECTEDBCAST, &ip_directedbcast, 0, 1 },
@@ -465,7 +475,7 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		SET(flags, IP_REDIRECT);
 #endif
 
-	switch (ip_forwarding) {
+	switch (atomic_load_int(&ip_forwarding)) {
 	case 2:
 		SET(flags, IP_FORWARDING_IPSEC);
 		/* FALLTHROUGH */
@@ -1792,6 +1802,10 @@ ip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 			atomic_inc_long(&rtgeneration);
 		NET_UNLOCK();
 		return (error);
+	case IPCTL_FORWARDING:
+		return (sysctl_bounded_arr(
+		    ipctl_vars_unlocked, nitems(ipctl_vars_unlocked),
+		    name, namelen, oldp, oldlenp, newp, newlen));
 	default:
 		NET_LOCK();
 		error = sysctl_bounded_arr(ipctl_vars, nitems(ipctl_vars),
