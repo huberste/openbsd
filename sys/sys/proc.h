@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.362 2024/07/08 13:17:12 claudio Exp $	*/
+/*	$OpenBSD: proc.h,v 1.365 2024/07/22 09:43:47 claudio Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -287,7 +287,7 @@ struct process {
 #define	PS_SINGLEEXIT	0x00001000	/* Other threads must die. */
 #define	PS_SINGLEUNWIND	0x00002000	/* Other threads must unwind. */
 #define	PS_NOZOMBIE	0x00004000	/* No signal or zombie at exit. */
-#define	PS_STOPPED	0x00008000	/* Just stopped, need sig to parent. */
+#define	PS_STOPPING	0x00008000	/* Just stopped, need sig to parent. */
 #define	PS_SYSTEM	0x00010000	/* No sigs, stats or swapping. */
 #define	PS_EMBRYO	0x00020000	/* New process, not yet fledged */
 #define	PS_ZOMBIE	0x00040000	/* Dead and ready to be waited for */
@@ -308,8 +308,8 @@ struct process {
      "\013WAITED" "\014COREDUMP" "\015SINGLEEXIT" "\016SINGLEUNWIND" \
      "\017NOZOMBIE" "\020STOPPED" "\021SYSTEM" "\022EMBRYO" "\023ZOMBIE" \
      "\024NOBROADCASTKILL" "\025PLEDGE" "\026WXNEEDED" "\027EXECPLEDGE" \
-     "\030ORPHAN" "\031CHROOT" "\032NOBTCFI" "\033ITIMER")
-
+     "\030ORPHAN" "\031CHROOT" "\032NOBTCFI" "\033ITIMER" "\034PIN" \
+     "\035LIBCPIN")
 
 struct kcov_dev;
 struct lock_list_entry;
@@ -444,8 +444,8 @@ struct proc {
 #define	P_BITS \
     ("\20" "\01INKTR" "\02PROFPEND" "\03ALRMPEND" "\04SIGSUSPEND" \
      "\05CANTSLEEP" "\06WSLEEP" "\010SINTR" "\012SYSTEM" "\013TIMEOUT" \
-     "\016WEXIT" "\020OWEUPC" "\024SUSPSINGLE" "\027XX" \
-     "\030CONTINUED" "\033THREAD" "\034SUSPSIG" "\035SOFTDEP" "\037CPUPEG")
+     "\016WEXIT" "\020OWEUPC" "\024SUSPSINGLE" "\030CONTINUED" "\033THREAD" \
+     "\034SUSPSIG" "\037CPUPEG")
 
 #define	THREAD_PID_OFFSET	100000
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.332 2024/07/10 12:28:46 claudio Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.334 2024/07/24 15:31:08 claudio Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -1482,7 +1482,7 @@ proc_stop(struct proc *p, int sw)
 
 	p->p_stat = SSTOP;
 	atomic_clearbits_int(&pr->ps_flags, PS_WAITED);
-	atomic_setbits_int(&pr->ps_flags, PS_STOPPED);
+	atomic_setbits_int(&pr->ps_flags, PS_STOPPING);
 	atomic_setbits_int(&p->p_flag, P_SUSPSIG);
 	/*
 	 * We need this soft interrupt to be handled fast.
@@ -1505,9 +1505,9 @@ proc_stop_sweep(void *v)
 	struct process *pr;
 
 	LIST_FOREACH(pr, &allprocess, ps_list) {
-		if ((pr->ps_flags & PS_STOPPED) == 0)
+		if ((pr->ps_flags & PS_STOPPING) == 0)
 			continue;
-		atomic_clearbits_int(&pr->ps_flags, PS_STOPPED);
+		atomic_clearbits_int(&pr->ps_flags, PS_STOPPING);
 
 		if ((pr->ps_pptr->ps_sigacts->ps_sigflags & SAS_NOCLDSTOP) == 0)
 			prsignal(pr->ps_pptr, SIGCHLD);
@@ -2164,6 +2164,7 @@ single_thread_set(struct proc *p, int flags)
 		panic("single_thread_mode = %d", mode);
 #endif
 	}
+	KASSERT((p->p_flag & P_SUSPSINGLE) == 0);
 	pr->ps_single = p;
 	pr->ps_singlecnt = pr->ps_threadcnt;
 
@@ -2233,6 +2234,7 @@ single_thread_wait(struct process *pr, int recheck)
 		if (!recheck)
 			break;
 	}
+	KASSERT((pr->ps_single->p_flag & P_SUSPSINGLE) == 0);
 	mtx_leave(&pr->ps_mtx);
 
 	return wait;
